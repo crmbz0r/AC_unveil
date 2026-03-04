@@ -22,7 +22,7 @@ public class Plugin : BasePlugin
         Log = base.Log;
         Harmony.CreateAndPatchAll(typeof(LuaPatch));
         Harmony.CreateAndPatchAll(typeof(CheatHooks));
-        Log.LogWarning("AiComi LuaMod geladen – warte auf BuildConditionsFromLua...");
+        Log.LogWarning("AiComi LuaMod loaded -- waiting for BuildConditionsFromLua...");
     }
 }
 
@@ -51,7 +51,7 @@ internal static class LuaPatch
             if (File.Exists(path))
             {
                 luaEnv.DoString(File.ReadAllText(path), "AiComi_LuaMod");
-                Plugin.Log.LogWarning($"Lua-Mod geladen aus: {path}");
+                Plugin.Log.LogWarning($"Lua-Mod loaded from: {path}");
             }
         }
         catch (Exception ex)
@@ -117,7 +117,7 @@ public class LuaConsole : MonoBehaviour
         UnityEngine.Object.DontDestroyOnLoad(go);
         _instance = go.AddComponent<LuaConsole>();
         _instance._luaEnv = env;
-        Plugin.Log.LogWarning("Lua Console bereit – F9 zum Öffnen");
+        Plugin.Log.LogWarning("Lua Console ready -- press F9 to open");
     }
 
     // ── State ─────────────────────────────────────────────────
@@ -181,17 +181,25 @@ public class LuaConsole : MonoBehaviour
                 "",
                 _styleWindow!
             );
-            DrawStarfield(_consoleRect);
         }
 
         if (_cheatVisible)
+        {
+            // Cheat panel direkt rechts neben der Console spawnen
+            _cheatRect = new Rect(
+                _consoleRect.x + _consoleRect.width + 6f,
+                _consoleRect.y,
+                _cheatRect.width,
+                _cheatRect.height
+            );
             _cheatRect = GUI.Window(
                 42425,
                 _cheatRect,
                 (GUI.WindowFunction)DrawCheatPanel,
-                "  ⚡ Cheat Panel",
+                "  Cheat Panel",
                 _styleWindow!
             );
+        }
     }
 
     // ── Console Window ────────────────────────────────────────
@@ -200,6 +208,7 @@ public class LuaConsole : MonoBehaviour
         // Rainbow Titel – feste Höhe reservieren damit nichts überlappt
         GUILayout.Space(26f);
         DrawRainbowTitle(new Rect(0, 2f, _consoleRect.width, 22f), "  ★ AiComi Lua Console  [F9]");
+        DrawStarfield(_consoleRect);
 
         const float TOOLBAR_H = 28f;
         const float LABEL_H = 18f;
@@ -249,58 +258,71 @@ public class LuaConsole : MonoBehaviour
     }
 
     // ── Cheat Panel ───────────────────────────────────────────
+    private GUIStyle? _styleToggleOn,
+        _styleToggleOff;
+
+    private bool DrawToggle(bool value, string label)
+    {
+        if (_styleToggleOn == null)
+        {
+            _styleToggleOn = new GUIStyle(_styleBtn!)
+            {
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleLeft,
+            };
+            _styleToggleOn.normal.background = MakeTex(new Color(0.10f, 0.28f, 0.10f, 1f));
+            _styleToggleOn.hover.background = MakeTex(new Color(0.13f, 0.35f, 0.13f, 1f));
+            _styleToggleOn.normal.textColor = new Color(0.4f, 1f, 0.4f);
+            _styleToggleOn.hover.textColor = new Color(0.5f, 1f, 0.5f);
+
+            _styleToggleOff = new GUIStyle(_styleBtn!)
+            {
+                fontStyle = FontStyle.Normal,
+                alignment = TextAnchor.MiddleLeft,
+            };
+            _styleToggleOff.normal.textColor = new Color(0.6f, 0.6f, 0.6f);
+            _styleToggleOff.hover.textColor = new Color(0.85f, 0.85f, 0.85f);
+        }
+
+        var style = value ? _styleToggleOn! : _styleToggleOff!;
+        var symbol = value ? "<ON> " : "[OFF]";
+        if (GUILayout.Button($"{symbol}  {label}", style))
+            return !value;
+        return value;
+    }
+
     private void DrawCheatPanel(int id)
     {
         GUILayout.Space(4);
 
         // ── RNG ──
         GUILayout.BeginVertical(GUI.skin.box);
-        GUILayout.Label("🎲  RNG & Chancen", GUI.skin.label);
-        CheatHooks.RiggedRng = GUILayout.Toggle(
-            CheatHooks.RiggedRng,
-            CheatHooks.RiggedRng ? "✅  Rigged RNG  (AN)" : "☐  Rigged RNG  (AUS)",
-            _styleToggle!
-        );
+        GUILayout.Label("~ RNG & Chance", GUI.skin.label);
+        CheatHooks.RiggedRng = DrawToggle(CheatHooks.RiggedRng, "Rigged RNG");
         GUILayout.EndVertical();
 
-        GUILayout.Space(6);
+        GUILayout.Space(5);
 
-        // ── Anger / Favor ──
+        // ── Dialog & Reactions ──
         GUILayout.BeginVertical(GUI.skin.box);
-        GUILayout.Label("💬  Dialog & Reaktionen", GUI.skin.label);
-
-        CheatHooks.NoAnger = GUILayout.Toggle(
-            CheatHooks.NoAnger,
-            CheatHooks.NoAnger ? "✅  Kein Anger  (AN)" : "☐  Kein Anger  (AUS)",
-            _styleToggle!
-        );
-
-        CheatHooks.NoFavorLoss = GUILayout.Toggle(
-            CheatHooks.NoFavorLoss,
-            CheatHooks.NoFavorLoss ? "✅  Kein Favor-Verlust  (AN)" : "☐  Kein Favor-Verlust  (AUS)",
-            _styleToggle!
-        );
-
+        GUILayout.Label("~ Dialog & Reactions", GUI.skin.label);
+        CheatHooks.NoAnger = DrawToggle(CheatHooks.NoAnger, "No Anger");
+        CheatHooks.NoFavorLoss = DrawToggle(CheatHooks.NoFavorLoss, "No Favor Loss");
         GUILayout.EndVertical();
 
-        GUILayout.Space(6);
+        GUILayout.Space(5);
 
-        // ── Schnell-Lua ──
+        // ── Quick Actions ──
         GUILayout.BeginVertical(GUI.skin.box);
-        GUILayout.Label("⚡  Schnell-Aktionen", GUI.skin.label);
+        GUILayout.Label("~ Quick Actions", GUI.skin.label);
 
-        // Snapshot-Status anzeigen
         if (_eventSnapshot != null)
-            GUILayout.Label(
-                $"📸 Snapshot: {_eventSnapshot.Count} Events gespeichert",
-                GUI.skin.label
-            );
+            GUILayout.Label($"  [*] Snapshot: {_eventSnapshot.Count} events saved", GUI.skin.label);
         else
-            GUILayout.Label("📸 Kein Snapshot vorhanden", GUI.skin.label);
+            GUILayout.Label("  [ ] No snapshot", GUI.skin.label);
 
-        if (GUILayout.Button("Alle Events freischalten", _styleBtn!))
+        if (GUILayout.Button("  [+] Unlock All Events", _styleBtn!))
         {
-            // Snapshot vor dem Freischalten
             TakeEventSnapshot();
             RunLua(
                 @"
@@ -313,22 +335,21 @@ public class LuaConsole : MonoBehaviour
                 for i=208,218 do em:Add(i) end
                 for i=221,223 do em:Add(i) end
                 em:Add(230) em:Add(231) em:Add(232) em:Add(240)
-                print('Alle Events freigeschaltet! Count: ' .. em.Count)
+                print('All events unlocked! Count: ' .. em.Count)
             "
             );
         }
 
-        var resetStyle = _eventSnapshot != null ? _styleBtn! : _styleBtn!;
         GUI.enabled = _eventSnapshot != null;
-        if (GUILayout.Button("↩ Events zurücksetzen", _styleBtn!))
+        if (GUILayout.Button("  [-] Restore Snapshot", _styleBtn!))
             RestoreEventSnapshot();
         GUI.enabled = true;
 
-        if (GUILayout.Button("EventMemory dumpen", _styleBtn!))
+        if (GUILayout.Button("  [?] Dump EventMemory", _styleBtn!))
             RunLua(
                 @"
                 local em = CS.AC.Lua.EventTable.EventMemory
-                print('Events (' .. em.Count .. '):')
+                print('EventMemory (' .. em.Count .. '):')
                 local e = em:GetEnumerator()
                 while e:MoveNext() do print('  ID: ' .. tostring(e.Current)) end
             "
@@ -369,7 +390,7 @@ public class LuaConsole : MonoBehaviour
                         _eventSnapshot.Add(Convert.ToInt32(r));
                     }
                     catch { }
-        AppendOutput($"[Snapshot] {_eventSnapshot.Count} Events gespeichert\n");
+        AppendOutput($"[Snapshot] {_eventSnapshot.Count} events saved\n");
     }
 
     private void RestoreEventSnapshot()
@@ -406,28 +427,28 @@ public class LuaConsole : MonoBehaviour
     {
         if (_luaEnv is null)
         {
-            AppendOutput("[ERROR] LuaEnv nicht verfügbar!\n");
+            AppendOutput("[ERROR] LuaEnv not available!\n");
             return;
         }
         if (showInput)
             AppendOutput($"> {code.Trim()}\n");
 
         var sb = new StringBuilder();
-        var oldPrint = _luaEnv.Global.Get<Action<object[]>>("print");
 
-        _luaEnv.Global.Set(
-            "print",
-            (Action<object[]>)(
-                args =>
-                {
-                    var line = string.Join(
-                        "\t",
-                        Array.ConvertAll<object, string>(args, a => a?.ToString() ?? "nil")
-                    );
-                    sb.AppendLine(line);
-                }
-            )
+        // print() über Lua-Seite umleiten – kein generisches Get<T> nötig
+        _luaEnv.DoString(
+            @"
+            __orig_print = print
+            print = function(...)
+                local args = {...}
+                local parts = {}
+                for i=1,#args do parts[i] = tostring(args[i]) end
+                __console_output = (__console_output or '') .. table.concat(parts, '\t') .. '\n'
+            end
+        ",
+            "print_redirect"
         );
+        _luaEnv.DoString("__console_output = ''", "clear_output");
 
         try
         {
@@ -447,8 +468,18 @@ public class LuaConsole : MonoBehaviour
         }
         finally
         {
-            if (oldPrint != null)
-                _luaEnv.Global.Set("print", oldPrint);
+            // Output einsammeln und print() wiederherstellen
+            try
+            {
+                var output = _luaEnv.DoString("return __console_output or ''", "get_output");
+                if (output != null && output.Length > 0 && output[0] is string s && s.Length > 0)
+                    sb.Insert(0, s);
+            }
+            catch { }
+            _luaEnv.DoString(
+                "print = __orig_print  __orig_print = nil  __console_output = nil",
+                "restore_print"
+            );
         }
 
         if (sb.Length > 0)
@@ -503,7 +534,7 @@ public class LuaConsole : MonoBehaviour
             _starTex.Apply();
         }
 
-        // Spawn neue Sterne
+        // Spawn neue Sterne – relative Koordinaten (0,0 = Fenster-Ecke)
         if (_stars.Length < MAX_STARS && Time.realtimeSinceStartup > _starSpawn)
         {
             _starSpawn = Time.realtimeSinceStartup + UnityEngine.Random.Range(0.08f, 0.3f);
@@ -511,8 +542,8 @@ public class LuaConsole : MonoBehaviour
             list.Add(
                 new Star
                 {
-                    x = window.x + UnityEngine.Random.Range(4f, window.width - 4f),
-                    y = window.y + UnityEngine.Random.Range(28f, window.height - 4f),
+                    x = UnityEngine.Random.Range(4f, window.width - 4f),
+                    y = UnityEngine.Random.Range(30f, window.height - 4f),
                     alpha = 0f,
                     speed = UnityEngine.Random.Range(0.4f, 1.2f),
                     target = UnityEngine.Random.Range(0.5f, 1.0f),
@@ -521,12 +552,12 @@ public class LuaConsole : MonoBehaviour
             _stars = list.ToArray();
         }
 
-        // Update + Draw
+        // Innerhalb des Fensters zeichnen
+        GUI.BeginGroup(new Rect(0, 0, window.width, window.height));
         var updated = new System.Collections.Generic.List<Star>(_stars.Length);
         for (int i = 0; i < _stars.Length; i++)
         {
             var s = _stars[i];
-            // Fade in bis target, dann fade out
             if (s.alpha < s.target)
                 s.alpha = Mathf.Min(s.target, s.alpha + s.speed * Time.deltaTime);
             else
@@ -534,14 +565,14 @@ public class LuaConsole : MonoBehaviour
 
             if (s.alpha > 0.01f)
             {
-                float size = s.target > 0.8f ? 2f : 1f; // helle Sterne etwas größer
+                float size = s.target > 0.8f ? 2f : 1f;
                 GUI.color = new Color(1f, 1f, 1f, s.alpha);
-                GUI.DrawTexture(new Rect(s.x, s.y, size, size), _starTex);
+                GUI.DrawTexture(new Rect(s.x, s.y, size, size), _starTex!);
                 GUI.color = Color.white;
                 updated.Add(s);
             }
-            // ausgefadete Sterne werden einfach entfernt
         }
+        GUI.EndGroup();
         _stars = updated.ToArray();
     }
 
