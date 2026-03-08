@@ -1,2 +1,1 @@
-# AC_unveil
-Releasees the power of LUA SCRIPTING! Forget difficult IL2CPP.
+unlocks the ability to run lua scripts as files or straight from the lua console I added.
