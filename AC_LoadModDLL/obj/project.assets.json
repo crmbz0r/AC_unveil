@@ -5355,11 +5355,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "G:\\illusion_modding\\XLua\\AC_LoadModDLL\\AiComi_LuaMod.csproj",
+      "projectUniqueName": "G:\\illusion_modding\\AC_unveil\\AC_LoadModDLL\\AiComi_LuaMod.csproj",
       "projectName": "AiComi_LuaMod",
-      "projectPath": "G:\\illusion_modding\\XLua\\AC_LoadModDLL\\AiComi_LuaMod.csproj",
+      "projectPath": "G:\\illusion_modding\\AC_unveil\\AC_LoadModDLL\\AiComi_LuaMod.csproj",
       "packagesPath": "C:\\Users\\user\\.nuget\\packages\\",
-      "outputPath": "G:\\illusion_modding\\XLua\\AC_LoadModDLL\\obj\\",
+      "outputPath": "G:\\illusion_modding\\AC_unveil\\AC_LoadModDLL\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages",

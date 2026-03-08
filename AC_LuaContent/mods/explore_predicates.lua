@@ -1,52 +1,37 @@
-﻿-- =============================================================
---  explore_predicates.lua  –  Runtime-Exploration der _predicates
---  In der F9-Console ausführen (Ctrl+Enter)
---  Voraussetzung: Im Story/Explore-Modus (nach Save-Load)
--- =============================================================
-
--- ParameterContainer holen
-local game = CS.UnityEngine.GameObject.FindObjectOfType(typeof(CS.Manager.Game))
-if not game then
-    print("[WARN] Manager.Game nicht gefunden - bist du im Hauptmenue?")
-    return
-end
-
-local pc = game.ParameterContainer
-if not pc then
-    print("[WARN] ParameterContainer ist nil")
-    return
-end
-
-local luaEnv = pc._luaEnv
-print("LuaEnv: " .. tostring(luaEnv))
-
--- _predicates zugreifen
--- Hinweis: _predicates ist ein privates Feld, ggf. xlua.private_accessible nötig
+﻿-- explore_predicates.lua - Runtime exploration of _predicates
 xlua.private_accessible(typeof(CS.AC.ParameterContainer))
 
+local game = CS.UnityEngine.GameObject.FindObjectOfType(typeof(CS.Manager.Game))
+if not game then print("[WARN] Manager.Game not found") return end
+
+local pc = game.ParameterContainer
+if not pc then print("[WARN] ParameterContainer is nil") return end
+
 local predicates = pc._predicates
-if not predicates then
-    print("[WARN] _predicates ist nil - BuildConditionsFromLua noch nicht gelaufen?")
-    return
-end
+if not predicates then print("[WARN] _predicates is nil") return end
 
-print("=== _predicates ===")
-print("Anzahl: " .. predicates.Count)
+print("=== _predicates (" .. predicates.Count .. ") ===")
 
--- Keys auflisten
 local keys = predicates.Keys
 local e = keys:GetEnumerator()
 local count = 0
+local ok_count = 0
+local err_count = 0
+
 while e:MoveNext() do
     local key = e.Current
     count = count + 1
-    
-    -- Den Predicate aufrufen (Invoke) um den aktuellen Zustand zu sehen
-    local pred = predicates[key]
-    local ok, result = pcall(function() return pred:Invoke() end)
-    local status = ok and tostring(result) or ("ERROR: " .. tostring(result))
-    
-    print(string.format("  [%3d] %-40s = %s", count, key, status))
+    local ok, result = pcall(function()
+        return pc:ValidateConditionStraight(key)
+    end)
+    if ok then
+        ok_count = ok_count + 1
+        print(string.format("  [%3d] %-40s = %s", count, key, tostring(result)))
+    else
+        err_count = err_count + 1
+        -- Nur kurze Fehlermeldung
+        print(string.format("  [%3d] %-40s = [needs context]", count, key))
+    end
 end
 
-print("=== Ende (" .. count .. " Predicates) ===")
+print(string.format("=== End: %d ok, %d need context ===", ok_count, err_count))

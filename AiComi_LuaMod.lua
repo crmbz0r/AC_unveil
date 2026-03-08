@@ -5,7 +5,16 @@
 
 local util = require 'xlua.util'
 local MOD_NAME = 'MeinMod v0.1'
-
+-- MOD_PATH wird automatisch von C# gesetzt
+function run(filename)
+    local f = io.open(MOD_PATH .. filename, "r")
+    if not f then print("[ERROR] File not found: " .. filename) return end
+    local code = f:read("*a")
+    f:close()
+    local fn, err = load(code)
+    if not fn then print("[ERROR] " .. tostring(err)) return end
+    fn()
+end
 local function log(msg)
     print('[' .. MOD_NAME .. '] ' .. tostring(msg))
 end
@@ -73,6 +82,6 @@ dump_scene()
 dump_events()
 
 -- ⬇ Auskommentieren um alle Events freizuschalten:
-unlock_all_events()
+-- unlock_all_events()
 
 log('Bereit.')

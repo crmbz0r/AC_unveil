@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <TargetFramework>net6.0</TargetFramework>
     <AssemblyName>AiComi_LuaMod</AssemblyName>
     <RootNamespace>AiComi_LuaMod</RootNamespace>

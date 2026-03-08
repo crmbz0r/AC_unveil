@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using AC;
+using AC.Scene.Touch;
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
+using Il2CppInterop.Runtime;
 using UnityEngine;
 using XLua;
 
@@ -22,6 +24,8 @@ public class Plugin : BasePlugin
         Log = base.Log;
         Harmony.CreateAndPatchAll(typeof(LuaPatch));
         Harmony.CreateAndPatchAll(typeof(CheatHooks));
+        Harmony.CreateAndPatchAll(typeof(TouchMonitorHooks));
+        Harmony.CreateAndPatchAll(typeof(TouchSceneAutoApply));
         Log.LogWarning("AiComi LuaMod loaded -- waiting for BuildConditionsFromLua...");
     }
 }
@@ -44,6 +48,9 @@ internal static class LuaPatch
 
         Plugin.Log.LogWarning("LuaEnv gefunden! Initialisiere Mod + Console...");
         LuaConsole.Initialize(luaEnv);
+        var modsPath =
+            Path.Combine(Paths.PluginPath, "lua_scripts", "mods").Replace("\\", "/") + "/";
+        luaEnv.Global.Set("MOD_PATH", modsPath);
 
         try
         {
@@ -66,38 +73,353 @@ internal static class LuaPatch
 // ─────────────────────────────────────────────────────────────
 internal static class CheatHooks
 {
-    // ── Rigged RNG: alle Wahrscheinlichkeits-Checks gewinnen ─
-    public static bool RiggedRng = false;
-
-    [HarmonyPostfix]
-    [HarmonyPatch(
-        typeof(ILLGAMES.Unity.Utils.ProbabilityCalclator),
-        nameof(ILLGAMES.Unity.Utils.ProbabilityCalclator.DetectFromPercent),
-        typeof(int)
-    )]
-    private static void RigRng(ref bool __result)
-    {
-        if (RiggedRng)
-            __result = true;
-    }
-
-    // ── No Anger: Anger/Discomfort wird nie erhöht ────────────
-    // Wir patchen SetAngry / AddAngry falls die Methode so heißt –
-    // Namen ggf. nach erstem Build in dnSpy nachprüfen
-    public static bool NoAnger = false;
-
-    // Placeholder – echter Methodenname muss noch gefunden werden
-    // [HarmonyPostfix]
-    // [HarmonyPatch(typeof(???), nameof(???.AddAnger))]
-    // private static void NoAngerHook(ref int __result) { if (NoAnger) __result = 0; }
-
     // ── No Favor Loss: negative Favor-Änderungen blockieren ──
+    //    _b__105_0 ist der Favor-Adder Lambda aus SetupParameterModification
     public static bool NoFavorLoss = false;
 
-    // Placeholder – wird aktiviert sobald wir die richtige Methode kennen
-    // [HarmonyPrefix]
-    // [HarmonyPatch(typeof(NPCData), nameof(NPCData.AddFavor))]
-    // private static void NoFavorLossHook(ref int value) { if (NoFavorLoss && value < 0) value = 0; }
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(AC.User.NPCData), "_SetupParameterModification_b__105_0")]
+    private static void NoFavorLossHook(ref int add)
+    {
+        if (NoFavorLoss && add < 0)
+            add = 0;
+    }
+
+    // ── No Mood Loss: Mood sinkt nie ──────────────────────────
+    //    _b__105_1 ist der Mood-Adder Lambda aus SetupParameterModification
+    public static bool NoMoodLoss = false;
+
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(AC.User.NPCData), "_SetupParameterModification_b__105_1")]
+    private static void NoMoodLossHook(ref int add)
+    {
+        if (NoMoodLoss && add < 0)
+            add = 0;
+    }
+
+    // ── No Dislike (Touch Scene): Miss-Gauge steigt nie ──────
+    public static bool NoDislike = false;
+
+    // ── Show Next H Button von Anfang an ──────────────────────
+    public static bool ShowNextH = false;
+
+    // ── Force Positive Choice: alle Dialog-Antworten lösen positiv aus ──
+    public static bool ForcePositiveChoice = false;
+
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(ILLGAMES.ADV.Commands.Base.Choice), "_Do_b__6_1")]
+    private static void ForcePositiveOnClick(ILLGAMES.ADV.Choice choice)
+    {
+        if (!ForcePositiveChoice || choice == null)
+            return;
+
+        var tag = choice.TagToJump;
+        if (string.IsNullOrEmpty(tag))
+            return;
+
+        bool isNegative = tag.StartsWith("Bad") || tag == "はずれ";
+        if (!isNegative)
+            return;
+
+        try
+        {
+            var rt = choice._rectTransform;
+            if (rt == null)
+                return;
+            var parent = rt.parent;
+            if (parent == null)
+                return;
+
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                var child = parent.GetChild(i);
+                if (child == rt)
+                    continue;
+
+                var sibling = child.gameObject.GetComponent<ILLGAMES.ADV.Choice>();
+                if (sibling == null)
+                    continue;
+
+                var siblingTag = sibling.TagToJump;
+                if (
+                    !string.IsNullOrEmpty(siblingTag)
+                    && !siblingTag.StartsWith("Bad")
+                    && siblingTag != "はずれ"
+                )
+                {
+                    Plugin.Log.LogInfo($"ForcePositive: swapped '{tag}' → '{siblingTag}'");
+                    choice.TagToJump = siblingTag;
+                    if (choice._outPositiveState != null)
+                        choice._outNegativeState = choice._outPositiveState;
+                    return;
+                }
+            }
+            Plugin.Log.LogWarning($"ForcePositive: no positive sibling found for '{tag}'");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogWarning($"ForcePositive: {ex.Message}");
+        }
+    }
+
+    // ── Lua-Code für Touch-Cheats ─────────────────────────────
+    internal const string LuaNoDislike =
+        @"
+        local tc = CS.UnityEngine.Object.FindObjectOfType(typeof(CS.AC.Scene.Touch.TouchController))
+        if tc == nil then print('[NoDislike] TouchController nicht gefunden') return end
+        xlua.private_accessible(typeof(CS.AC.Scene.Touch.TouchController))
+        local s = tc._sliderMiss
+        s.maxValue = 0  s.minValue = 0
+        local sd = tc._systemData
+        sd.CharaProbability = 100
+        local bp = sd.BaseProbability
+        for i=0,bp.Length-1 do bp[i]=100 end
+        local pp = sd.PartsProbability
+        for i=0,pp.Length-1 do
+            local r=pp[i] for j=0,r.Length-1 do r[j]=100 end
+        end
+        print('[NoDislike] Werte gesetzt!')
+    ";
+
+    internal const string LuaShowNextH =
+        @"
+        local all = CS.UnityEngine.Resources.FindObjectsOfTypeAll(typeof(CS.UnityEngine.GameObject))
+        for i=0,all.Length-1 do
+            local go = all[i]
+            if go.name == 'Button Next H' and not go.activeSelf then
+                go:SetActive(true)
+                print('[ShowNextH] Button aktiviert!')
+                return
+            end
+        end
+        print('[ShowNextH] Button nicht gefunden')
+    ";
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TouchScene Auto-Apply: aktive Cheats beim Start automatisch anwenden
+// ─────────────────────────────────────────────────────────────
+[HarmonyPatch(typeof(TouchController), nameof(TouchController.AddMissGauge))]
+public static class TouchSceneAutoApply
+{
+    private static bool _applied = false;
+    private static IntPtr _lastTcPtr = IntPtr.Zero;
+
+    [HarmonyPostfix]
+    private static void OnAddMissGauge(TouchController __instance)
+    {
+        // Neue TouchController-Instanz = neue Touch Scene → _applied zurücksetzen
+        var ptr = Il2CppInterop.Runtime.IL2CPP.Il2CppObjectBaseToPtr(__instance);
+        if (ptr != _lastTcPtr)
+        {
+            _lastTcPtr = ptr;
+            _applied = false;
+            Plugin.Log.LogInfo("[TouchScene] Neue Instanz erkannt – Reset");
+        }
+
+        if (_applied)
+            return;
+        _applied = true;
+        Plugin.Log.LogInfo("[TouchScene] Applying active cheats...");
+        if (CheatHooks.NoDislike)
+        {
+            LuaConsole.RunLuaStatic(CheatHooks.LuaNoDislike);
+            ApplyUnlockCursors();
+        }
+        if (CheatHooks.ShowNextH)
+            ApplyShowNextH(__instance);
+    }
+
+    internal static void ApplyShowNextH(TouchController? tc = null)
+    {
+        if (tc == null)
+            tc = UnityEngine
+                .Object.FindObjectOfType(Il2CppType.Of<TouchController>())
+                ?.TryCast<TouchController>();
+        if (tc == null)
+        {
+            Plugin.Log.LogWarning("[ShowNextH] TouchController nicht gefunden");
+            return;
+        }
+        try
+        {
+            var btn = tc._buttonH;
+            if (btn != null && !btn.gameObject.activeSelf)
+            {
+                btn.gameObject.SetActive(true);
+                Plugin.Log.LogInfo("[ShowNextH] _buttonH aktiviert");
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogWarning("[ShowNextH] " + ex.Message);
+        }
+    }
+
+    private static void ApplyUnlockCursors()
+    {
+        var gcType = Il2CppType.Of<ILLGAMES.Unity.Component.GameCursor>();
+        var all = Resources.FindObjectsOfTypeAll(gcType);
+        if (all.Length < 2) return;
+
+        var gcExplore = all[0].TryCast<ILLGAMES.Unity.Component.GameCursor>();
+        var gcTouch   = all[1].TryCast<ILLGAMES.Unity.Component.GameCursor>();
+        if (gcExplore == null || gcTouch == null) return;
+
+        gcTouch._anameTex = gcExplore._anameTex;
+        gcTouch.UpdateCursorLock();
+        Plugin.Log.LogInfo("[UnlockCursors] Applied");
+    }
+
+    public static void Reset() => _applied = false;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Touch Monitor Hooks
+//  Captures private TouchController fields into public statics
+//  so Lua can read them via CS.AiComi_LuaMod.TouchMonitorHooks
+// ─────────────────────────────────────────────────────────────
+[HarmonyPatch]
+public static class TouchMonitorHooks
+{
+    // ── Snapshot metadata ─────────────────────────────────────
+    public static bool Captured { get; private set; }
+    public static int SnapCount { get; private set; }
+
+    // ── Gauges ────────────────────────────────────────────────
+    public static float MissGauge { get; private set; } // 0..1, -1=unavailable
+    public static float PleasureGauge { get; private set; } // 0..1, -1=unavailable
+    public static bool MissOver { get; private set; }
+    public static float GaugeUpSpeed { get; private set; }
+    public static float GaugeDownSpeed { get; private set; }
+
+    // ── Touch state ───────────────────────────────────────────
+    public static bool IsHit { get; private set; }
+    public static bool IsDrag { get; private set; }
+    public static bool IsKiss { get; private set; }
+    public static int NowHitParts { get; private set; } // PartsKind int
+    public static int NoTouch { get; private set; } // NoTouchKind int
+    public static int MainPoint { get; private set; }
+
+    // ── Motion ────────────────────────────────────────────────
+    public static float MotionParam { get; private set; }
+    public static float SpeedBody { get; private set; }
+    public static float SpeedHand { get; private set; }
+
+    // ── Correction values ─────────────────────────────────────
+    public static float Correction0 { get; private set; }
+    public static float Correction1 { get; private set; }
+    public static float Correction2 { get; private set; }
+    public static float Correction3 { get; private set; }
+
+    // ── Other ─────────────────────────────────────────────────
+    public static bool IsOrgasm { get; private set; }
+    public static int OrgasmCount { get; private set; }
+
+    // ── Last AddMissGauge call ────────────────────────────────
+    public static int LastMissArea { get; private set; } = -99;
+    public static bool LastMissHit { get; private set; }
+
+    // ── Arrays as pipe-separated strings ─────────────────────
+    // AreaKind values: None=-1, BigSuccess=0, Success=1, Failure=2, BigFailure=3
+    public static string AreaKindStr { get; private set; } = "";
+    public static string AreaProbStr { get; private set; } = "";
+    public static string TouchedAreaStr { get; private set; } = "";
+
+    // ── Capture ───────────────────────────────────────────────
+    private static void CaptureState(TouchController tc)
+    {
+        if (tc == null)
+            return;
+        Captured = true;
+        MissGauge = tc._sliderMiss != null ? tc._sliderMiss.value : -1f;
+        PleasureGauge = tc._sliderF != null ? tc._sliderF.value : -1f;
+        MissOver = tc._missOver;
+        GaugeUpSpeed = tc._gaugeUpSpeed;
+        GaugeDownSpeed = tc._gaugeDownSpeed;
+        IsHit = tc._isHit;
+        IsDrag = tc._isDrag;
+        IsKiss = tc._isKiss;
+        NowHitParts = (int)tc._nowHitParts;
+        NoTouch = (int)tc._noTouch;
+        MainPoint = tc._mainPoint;
+        MotionParam = tc._motionParam;
+        SpeedBody = tc._speedBodyParam;
+        SpeedHand = tc._speedHandParam;
+        Correction0 = tc._correctionValue0;
+        Correction1 = tc._correctionValue1;
+        Correction2 = tc._correctionValue2;
+        Correction3 = tc._correctionValue3;
+        IsOrgasm = tc._isOrgasm;
+        OrgasmCount = tc._orgasmCount;
+
+        var ak = tc._areaKind;
+        if (ak != null)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < ak.Length; i++)
+            {
+                if (i > 0)
+                    sb.Append('|');
+                sb.Append((int)ak[i]);
+            }
+            AreaKindStr = sb.ToString();
+        }
+        var ap = tc._areaProbability;
+        if (ap != null)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < ap.Length; i++)
+            {
+                if (i > 0)
+                    sb.Append('|');
+                sb.Append(ap[i]);
+            }
+            AreaProbStr = sb.ToString();
+        }
+        var ta = tc._touchedArea;
+        if (ta != null)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < ta.Length; i++)
+            {
+                if (i > 0)
+                    sb.Append('|');
+                sb.Append(ta[i] ? 'T' : '.');
+            }
+            TouchedAreaStr = sb.ToString();
+        }
+        SnapCount++;
+    }
+
+    // ── Patches ───────────────────────────────────────────────
+    [HarmonyPostfix, HarmonyPatch(typeof(TouchController), nameof(TouchController.AddMissGauge))]
+    private static void OnAddMiss(TouchController __instance, int area, bool __result)
+    {
+        LastMissArea = area;
+        LastMissHit = __result;
+        CaptureState(__instance);
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(TouchController), nameof(TouchController.SubMisssGauge))]
+    private static void OnSubMiss(TouchController __instance) => CaptureState(__instance);
+
+    [HarmonyPostfix, HarmonyPatch(typeof(TouchController), nameof(TouchController.TouchPart))]
+    private static void OnTouchPart(TouchController __instance) => CaptureState(__instance);
+
+    // Breiterer Fallback: Update() fangen
+    [HarmonyPostfix, HarmonyPatch(typeof(TouchController), "Update")]
+    private static void OnUpdate(TouchController __instance) => CaptureState(__instance);
+
+    // Manuell aus Lua aufrufbar
+    public static void ForceCapture()
+    {
+        var tc = UnityEngine.Object.FindObjectOfType<TouchController>();
+        if (tc != null)
+            CaptureState(tc);
+        else
+            Plugin.Log.LogWarning("[TouchMonitor] ForceCapture: TouchController not found");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -135,16 +457,18 @@ public class LuaConsole : MonoBehaviour
     private int _historyIdx = -1;
 
     // Cheat panel
-    private Rect _cheatRect = new Rect(810, 80, 280, 320);
+    private Rect _cheatRect = new Rect(810, 80, 280, 420);
 
-    // Styles
+    // Styles – jeden Frame neu zuweisen (billig); Texturen permanent cachen (teuer)
     private GUIStyle? _styleOutput,
         _styleInput,
         _styleBtn,
         _styleBtnActive,
         _styleWindow,
         _styleToggle;
-    private bool _stylesInit = false;
+
+    // Texturen permanent cachen – überleben GC und Skin-Reset
+    private readonly Dictionary<int, Texture2D> _texCache = new();
 
     public LuaConsole(IntPtr ptr)
         : base(ptr) { }
@@ -153,17 +477,17 @@ public class LuaConsole : MonoBehaviour
     void OnApplicationFocus(bool focus)
     {
         if (focus)
-        {
-            // Styles neu initialisieren damit Unity GUI nach Alt+Tab korrekt rendert
-            _stylesInit = false;
             _styleRainbow = null;
-        }
     }
 
     void Update()
     {
         if (Input.GetKeyDown(KeyCode.F9))
+        {
             _consoleVisible = !_consoleVisible;
+            if (!_consoleVisible)
+                _cheatVisible = false;
+        }
     }
 
     void OnGUI()
@@ -172,8 +496,11 @@ public class LuaConsole : MonoBehaviour
             return;
         InitStyles();
 
+        var bgTex = Tex(new Color(0.13f, 0.13f, 0.14f, 0.97f));
+
         if (_consoleVisible)
         {
+            GUI.DrawTexture(_consoleRect, bgTex);
             _consoleRect = GUI.Window(
                 42424,
                 _consoleRect,
@@ -185,13 +512,13 @@ public class LuaConsole : MonoBehaviour
 
         if (_cheatVisible)
         {
-            // Cheat panel direkt rechts neben der Console spawnen
             _cheatRect = new Rect(
                 _consoleRect.x + _consoleRect.width + 6f,
                 _consoleRect.y,
                 _cheatRect.width,
                 _cheatRect.height
             );
+            GUI.DrawTexture(_cheatRect, bgTex);
             _cheatRect = GUI.Window(
                 42425,
                 _cheatRect,
@@ -208,7 +535,6 @@ public class LuaConsole : MonoBehaviour
         // Rainbow Titel – feste Höhe reservieren damit nichts überlappt
         GUILayout.Space(26f);
         DrawRainbowTitle(new Rect(0, 2f, _consoleRect.width, 22f), "  ★ AiComi Lua Console  [F9]");
-        DrawStarfield(_consoleRect);
 
         const float TOOLBAR_H = 28f;
         const float LABEL_H = 18f;
@@ -270,8 +596,8 @@ public class LuaConsole : MonoBehaviour
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleLeft,
             };
-            _styleToggleOn.normal.background = MakeTex(new Color(0.10f, 0.28f, 0.10f, 1f));
-            _styleToggleOn.hover.background = MakeTex(new Color(0.13f, 0.35f, 0.13f, 1f));
+            _styleToggleOn.normal.background = Tex(new Color(0.10f, 0.28f, 0.10f, 1f));
+            _styleToggleOn.hover.background = Tex(new Color(0.13f, 0.35f, 0.13f, 1f));
             _styleToggleOn.normal.textColor = new Color(0.4f, 1f, 0.4f);
             _styleToggleOn.hover.textColor = new Color(0.5f, 1f, 0.5f);
 
@@ -295,19 +621,40 @@ public class LuaConsole : MonoBehaviour
     {
         GUILayout.Space(4);
 
-        // ── RNG ──
+        // ── Dialog & Reactions ──
         GUILayout.BeginVertical(GUI.skin.box);
-        GUILayout.Label("~ RNG & Chance", GUI.skin.label);
-        CheatHooks.RiggedRng = DrawToggle(CheatHooks.RiggedRng, "Rigged RNG");
+        GUILayout.Label("~ Dialog & Reactions", GUI.skin.label);
+        CheatHooks.NoFavorLoss = DrawToggle(CheatHooks.NoFavorLoss, "No Favor Loss");
+        CheatHooks.NoMoodLoss = DrawToggle(CheatHooks.NoMoodLoss, "No Mood Loss");
+        CheatHooks.ForcePositiveChoice = DrawToggle(
+            CheatHooks.ForcePositiveChoice,
+            "Force Positive Choice"
+        );
         GUILayout.EndVertical();
 
         GUILayout.Space(5);
 
-        // ── Dialog & Reactions ──
+        // ── Touch Scene ──
         GUILayout.BeginVertical(GUI.skin.box);
-        GUILayout.Label("~ Dialog & Reactions", GUI.skin.label);
-        CheatHooks.NoAnger = DrawToggle(CheatHooks.NoAnger, "No Anger");
-        CheatHooks.NoFavorLoss = DrawToggle(CheatHooks.NoFavorLoss, "No Favor Loss");
+        GUILayout.Label("~ Touch Scene", GUI.skin.label);
+
+        // No Dislike: beim Aktivieren Lua-Code ausführen
+        var prevNoDislike = CheatHooks.NoDislike;
+        CheatHooks.NoDislike = DrawToggle(CheatHooks.NoDislike, "No Dislike");
+        if (CheatHooks.NoDislike && !prevNoDislike)
+        {
+            TouchSceneAutoApply.Reset();
+            RunLua(CheatHooks.LuaNoDislike);
+        }
+
+        var prevShowNextH = CheatHooks.ShowNextH;
+        CheatHooks.ShowNextH = DrawToggle(CheatHooks.ShowNextH, "Show Next H");
+        if (CheatHooks.ShowNextH && !prevShowNextH)
+        {
+            TouchSceneAutoApply.Reset();
+            TouchSceneAutoApply.ApplyShowNextH();
+        }
+
         GUILayout.EndVertical();
 
         GUILayout.Space(5);
@@ -368,7 +715,6 @@ public class LuaConsole : MonoBehaviour
         if (_luaEnv is null)
             return;
         _eventSnapshot = new HashSet<int>();
-        var em = _luaEnv.Global.Get<object>("CS") as object;
         // Snapshot via Lua auslesen
         var results = _luaEnv.DoString(
             @"
@@ -423,7 +769,19 @@ public class LuaConsole : MonoBehaviour
         RunLua(code, showInput: true);
     }
 
-    private void RunLua(string code, bool showInput = false)
+    private void RunLua(string code, bool showInput = false) => RunLuaStatic(code, showInput);
+
+    public static void RunLuaStatic(string code, bool showInput = false)
+    {
+        if (_instance?._luaEnv is null)
+        {
+            Plugin.Log.LogWarning("[LuaConsole] RunLuaStatic: LuaEnv not available");
+            return;
+        }
+        _instance.RunLuaInternal(code, showInput);
+    }
+
+    private void RunLuaInternal(string code, bool showInput = false)
     {
         if (_luaEnv is null)
         {
@@ -472,8 +830,12 @@ public class LuaConsole : MonoBehaviour
             try
             {
                 var output = _luaEnv.DoString("return __console_output or ''", "get_output");
-                if (output != null && output.Length > 0 && output[0] is string s && s.Length > 0)
-                    sb.Insert(0, s);
+                if (output != null && output.Length > 0 && output[0] != null)
+                {
+                    var s = output[0].ToString();
+                    if (s.Length > 0)
+                        sb.Insert(0, s);
+                }
             }
             catch { }
             _luaEnv.DoString(
@@ -508,72 +870,6 @@ public class LuaConsole : MonoBehaviour
         }
         else
             _input = _history[_historyIdx];
-    }
-
-    // ── Starfield ─────────────────────────────────────────────
-    private struct Star
-    {
-        public float x,
-            y,
-            alpha,
-            speed,
-            target;
-    }
-
-    private Star[] _stars = System.Array.Empty<Star>();
-    private Texture2D? _starTex;
-    private float _starSpawn = 0f;
-    private const int MAX_STARS = 60;
-
-    private void DrawStarfield(Rect window)
-    {
-        if (_starTex == null)
-        {
-            _starTex = new Texture2D(1, 1);
-            _starTex.SetPixel(0, 0, Color.white);
-            _starTex.Apply();
-        }
-
-        // Spawn neue Sterne – relative Koordinaten (0,0 = Fenster-Ecke)
-        if (_stars.Length < MAX_STARS && Time.realtimeSinceStartup > _starSpawn)
-        {
-            _starSpawn = Time.realtimeSinceStartup + UnityEngine.Random.Range(0.08f, 0.3f);
-            var list = new System.Collections.Generic.List<Star>(_stars);
-            list.Add(
-                new Star
-                {
-                    x = UnityEngine.Random.Range(4f, window.width - 4f),
-                    y = UnityEngine.Random.Range(30f, window.height - 4f),
-                    alpha = 0f,
-                    speed = UnityEngine.Random.Range(0.4f, 1.2f),
-                    target = UnityEngine.Random.Range(0.5f, 1.0f),
-                }
-            );
-            _stars = list.ToArray();
-        }
-
-        // Innerhalb des Fensters zeichnen
-        GUI.BeginGroup(new Rect(0, 0, window.width, window.height));
-        var updated = new System.Collections.Generic.List<Star>(_stars.Length);
-        for (int i = 0; i < _stars.Length; i++)
-        {
-            var s = _stars[i];
-            if (s.alpha < s.target)
-                s.alpha = Mathf.Min(s.target, s.alpha + s.speed * Time.deltaTime);
-            else
-                s.alpha -= s.speed * 0.4f * Time.deltaTime;
-
-            if (s.alpha > 0.01f)
-            {
-                float size = s.target > 0.8f ? 2f : 1f;
-                GUI.color = new Color(1f, 1f, 1f, s.alpha);
-                GUI.DrawTexture(new Rect(s.x, s.y, size, size), _starTex!);
-                GUI.color = Color.white;
-                updated.Add(s);
-            }
-        }
-        GUI.EndGroup();
-        _stars = updated.ToArray();
     }
 
     // ── Marquee / LED Laufschrift ─────────────────────────────
@@ -630,27 +926,29 @@ public class LuaConsole : MonoBehaviour
     private void AppendOutput(string text)
     {
         _output += text;
-        if (_output.Length > 12000)
-            _output = _output[(_output.Length - 12000)..];
+        if (_output.Length > 32000)
+            _output = _output[(_output.Length - 32000)..];
     }
 
-    private static Texture2D MakeTex(Color col)
+    // Textur aus Cache holen oder neu erstellen – überlebt GC dauerhaft
+    private Texture2D Tex(Color col)
     {
+        int key = col.GetHashCode();
+        if (_texCache.TryGetValue(key, out var existing) && existing != null)
+            return existing;
         var t = new Texture2D(1, 1);
         t.SetPixel(0, 0, col);
         t.Apply();
+        t.hideFlags = HideFlags.HideAndDontSave;
+        UnityEngine.Object.DontDestroyOnLoad(t);
+        _texCache[key] = t;
         return t;
     }
 
+    // Styles werden jeden Frame neu zugewiesen – Texturen kommen aus Cache
     private void InitStyles()
     {
-        if (_stylesInit)
-            return;
-        _stylesInit = true;
-
-        // Farben
-        var bg = new Color(0.13f, 0.13f, 0.14f, 0.97f); // fast schwarz
-        var bgHover = new Color(0.18f, 0.18f, 0.20f, 0.97f);
+        var bg = new Color(0.13f, 0.13f, 0.14f, 0.97f);
         var bgInput = new Color(0.10f, 0.10f, 0.11f, 1f);
         var bgBtn = new Color(0.22f, 0.22f, 0.25f, 1f);
         var bgBtnHov = new Color(0.30f, 0.30f, 0.35f, 1f);
@@ -658,51 +956,45 @@ public class LuaConsole : MonoBehaviour
         var textGreen = new Color(0.4f, 1f, 0.4f);
         var accent = new Color(0.25f, 0.25f, 0.30f, 1f);
 
-        // Window
         _styleWindow = new GUIStyle(GUI.skin.window) { fontSize = 17, fontStyle = FontStyle.Bold };
-        _styleWindow.normal.background = MakeTex(bg);
-        _styleWindow.onNormal.background = MakeTex(bg);
-        _styleWindow.normal.textColor = new Color(0, 0, 0, 0); // unsichtbar aber nicht transparent
+        _styleWindow.normal.background = null;
+        _styleWindow.onNormal.background = null;
+        _styleWindow.normal.textColor = new Color(0, 0, 0, 0);
 
-        // Output TextArea
         _styleOutput = new GUIStyle(GUI.skin.textArea)
         {
             fontSize = 16,
             wordWrap = true,
             richText = false,
         };
-        _styleOutput.normal.background = MakeTex(bgInput);
-        _styleOutput.focused.background = MakeTex(bgInput);
+        _styleOutput.normal.background = Tex(bgInput);
+        _styleOutput.focused.background = Tex(bgInput);
         _styleOutput.normal.textColor = textMain;
         _styleOutput.focused.textColor = textMain;
 
-        // Input TextArea
         _styleInput = new GUIStyle(GUI.skin.textArea) { fontSize = 17, wordWrap = true };
-        _styleInput.normal.background = MakeTex(bgInput);
-        _styleInput.focused.background = MakeTex(new Color(0.12f, 0.12f, 0.16f, 1f));
+        _styleInput.normal.background = Tex(bgInput);
+        _styleInput.focused.background = Tex(new Color(0.12f, 0.12f, 0.16f, 1f));
         _styleInput.normal.textColor = Color.white;
         _styleInput.focused.textColor = Color.white;
 
-        // Button
         _styleBtn = new GUIStyle(GUI.skin.button)
         {
             fontSize = 16,
             alignment = TextAnchor.MiddleCenter,
         };
-        _styleBtn.normal.background = MakeTex(bgBtn);
-        _styleBtn.hover.background = MakeTex(bgBtnHov);
-        _styleBtn.active.background = MakeTex(accent);
+        _styleBtn.normal.background = Tex(bgBtn);
+        _styleBtn.hover.background = Tex(bgBtnHov);
+        _styleBtn.active.background = Tex(accent);
         _styleBtn.normal.textColor = textMain;
         _styleBtn.hover.textColor = Color.white;
 
-        // Button aktiv (Cheats AN)
-        _styleBtnActive = new GUIStyle(_styleBtn!) { fontStyle = FontStyle.Bold };
-        _styleBtnActive.normal.background = MakeTex(new Color(0.15f, 0.35f, 0.15f, 1f));
-        _styleBtnActive.hover.background = MakeTex(new Color(0.18f, 0.42f, 0.18f, 1f));
+        _styleBtnActive = new GUIStyle(_styleBtn) { fontStyle = FontStyle.Bold };
+        _styleBtnActive.normal.background = Tex(new Color(0.15f, 0.35f, 0.15f, 1f));
+        _styleBtnActive.hover.background = Tex(new Color(0.18f, 0.42f, 0.18f, 1f));
         _styleBtnActive.normal.textColor = textGreen;
         _styleBtnActive.hover.textColor = textGreen;
 
-        // Toggle
         _styleToggle = new GUIStyle(GUI.skin.toggle) { fontSize = 16 };
         _styleToggle.normal.textColor = textMain;
         _styleToggle.hover.textColor = Color.white;

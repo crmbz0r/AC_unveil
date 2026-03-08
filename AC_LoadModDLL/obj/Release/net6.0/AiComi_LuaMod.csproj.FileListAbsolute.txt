@@ -10,3 +10,16 @@ G:\illusion_modding\XLua\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.dll
 G:\illusion_modding\XLua\AC_LoadModDLL\obj\Release\net6.0\refint\AiComi_LuaMod.dll
 G:\illusion_modding\XLua\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.pdb
 G:\illusion_modding\XLua\AC_LoadModDLL\obj\Release\net6.0\ref\AiComi_LuaMod.dll
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.csproj.AssemblyReference.cache
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.GeneratedMSBuildEditorConfig.editorconfig
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.AssemblyInfoInputs.cache
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.AssemblyInfo.cs
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.csproj.CoreCompileInputs.cache
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.sourcelink.json
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.dll
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\refint\AiComi_LuaMod.dll
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\AiComi_LuaMod.pdb
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\bin\Release\net6.0\AiComi_LuaMod.deps.json
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\bin\Release\net6.0\AiComi_LuaMod.dll
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\bin\Release\net6.0\AiComi_LuaMod.pdb
+G:\illusion_modding\AC_unveil\AC_LoadModDLL\obj\Release\net6.0\ref\AiComi_LuaMod.dll

@@ -38,3 +38,10 @@ luac.out
 *.i*86
 *.x86_64
 *.hex
+search_result.txt
+search_result2.txt
+AC_unveil.code-workspace
+/AC_LoadModDLL/obj
+/AC_LoadModDLL/obj/Release
+/AC_LoadModDLL/bin
+/AC_LoadModDLL/obj
