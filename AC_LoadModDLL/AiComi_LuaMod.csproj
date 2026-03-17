@@ -36,10 +36,10 @@
   <!-- Post-build: DLL ins Spielverzeichnis kopieren und Spiel starten -->
   <Target Name="DeployAndLaunch" AfterTargets="Build">
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll"
-          DestinationFolder="G:\Games\AICOMI\BepInEx\plugins\"
+          DestinationFolder="G:\Games\AICOMI1\BepInEx\plugins\"
           OverwriteReadOnlyFiles="true" />
     <Message Importance="high" Text="$(AssemblyName).dll deployed." />
-    <Exec Command="cmd /c start &quot;&quot; &quot;G:\Games\AICOMI\Aicomi.exe&quot;"
+    <Exec Command="cmd /c start &quot;&quot; &quot;G:\Games\AICOMI1\Aicomi.exe&quot;"
           IgnoreExitCode="true" />
   </Target>
 
