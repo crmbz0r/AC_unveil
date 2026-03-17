@@ -8,7 +8,7 @@ A BepInEx plugin for AiComi that enables Lua scripting support and provides vari
 - **Some Nice Cheats as a Bonus, including:**
   - **Touch Item Unlocker**: Unlock all cursor items in the massage / "prank" scene for unrestricted... pranking.
   - **Touch Scene No Dislike**: Touch 'em wherever you want, how often you want. (random rejection may still occur depending on personality rarely)
-  - **Touch Scene Next H**: Show the "
+  - **Touch Scene Next H**: Show the "I want ȘΞХ" button immediately, no need to complete two massage sessions if you don' want to.
   - **Cheat Hooks**: Various gameplay cheats and modifications
   - **Dialog Scene Hooks**: Enhanced dialog scene functionality
 
