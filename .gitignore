@@ -38,10 +38,19 @@ luac.out
 *.i*86
 *.x86_64
 *.hex
+
+# Plugin Related
 search_result.txt
 search_result2.txt
 AC_unveil.code-workspace
-/AC_LoadModDLL/obj
-/AC_LoadModDLL/obj/Release
-/AC_LoadModDLL/bin
-/AC_LoadModDLL/obj
+/AC_LoadModDLL/old/**
+/AC_LoadModDLL/.vscode/**
+/AC_LoadModDLL/.specstory/**
+*.bak
+./.vscode/*
+AC_unveil_lua.code-workspace2.code-workspace
+.vscode/launch.json
+/AC_LoadModDLL/obj/**
+/AC_LoadModDLL/bin/**
+/AC_LoadModDLL/obj/Release/**
+/AC_LoadModDLL/obj/Release/net6.0/**
