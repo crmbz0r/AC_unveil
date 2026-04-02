@@ -1,9 +1,11 @@
 ﻿using System;
+using System.Reflection;
 using AC.Scene.Touch;
 using HarmonyLib;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace AiComi_LuaMod;
 
@@ -13,12 +15,14 @@ namespace AiComi_LuaMod;
 //  - No Dislike
 //  - Show Next H Button
 // ─────────────────────────────────────────────────────────────
+#pragma warning disable IDE0051
 [HarmonyPatch(typeof(TouchController))]
 public static class TouchSceneHooks
 {
     public static bool UnlockItems = false;
     public static bool NoDislike = false;
     public static bool ShowNextH = false;
+    public static bool NoTouchInterruption = false;
 
     // ── Lua-Code für No Dislike ───────────────────────────────
     internal const string LuaNoDislike =
@@ -41,7 +45,8 @@ public static class TouchSceneHooks
 
     // ── Helper ────────────────────────────────────────────────
     private static Il2CppReferenceArray<Il2CppSystem.ValueTuple<int, int>> MakeItems(
-        params (int, int)[] tuples)
+        params (int, int)[] tuples
+    )
     {
         var arr = new Il2CppReferenceArray<Il2CppSystem.ValueTuple<int, int>>(tuples.Length);
         for (int i = 0; i < tuples.Length; i++)
@@ -101,7 +106,8 @@ public static class TouchSceneHooks
     // ── Show Next H ───────────────────────────────────────────
     public static void ApplyShowNextH(TouchController? tc = null)
     {
-        tc ??= UnityEngine.Object.FindObjectOfType(Il2CppType.Of<TouchController>())
+        tc ??= UnityEngine
+            .Object.FindObjectOfType(Il2CppType.Of<TouchController>())
             ?.TryCast<TouchController>();
 
         if (tc == null)
@@ -116,12 +122,33 @@ public static class TouchSceneHooks
             if (btn != null && !btn.gameObject.activeSelf)
             {
                 btn.gameObject.SetActive(true);
-                Plugin.Log.LogInfo("[TouchScene] ShowNextH: _buttonH made available!");
+                Plugin.Log.LogWarning("[TouchScene] ShowNextH: _buttonH made available!");
             }
         }
         catch (Exception ex)
         {
             Plugin.Log.LogWarning("[TouchScene] ShowNextH: " + ex.Message);
         }
+    }
+
+    // ── No Touch Interruption Patches ─────────────────────────
+    [HarmonyPostfix]
+    [HarmonyPatch("Update")]
+    private static void ForceNoRedrawUpdate(TouchController __instance)
+    {
+        if (!NoTouchInterruption)
+            return;
+        __instance._redraw0 = false;
+        __instance._redraw1 = false;
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch("LateUpdate")]
+    private static void ForceNoRedrawLateUpdate(TouchController __instance)
+    {
+        if (!NoTouchInterruption)
+            return;
+        __instance._redraw0 = false;
+        __instance._redraw1 = false;
     }
 }

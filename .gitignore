@@ -60,3 +60,5 @@ AC_unveil_lua.code-workspace2.code-workspace
 .github/copilot-instructions.md
 /.specstory
 /release
+/AC_LoadModDLL/references
+/References

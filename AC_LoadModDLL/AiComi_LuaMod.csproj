@@ -33,6 +33,11 @@
       DestinationFolder="$(MSBuildThisFileDirectory)..\BepInEx\plugins\"
       OverwriteReadOnlyFiles="true"
     />
+    <Copy
+      SourceFiles="$(OutputPath)$(AssemblyName).dll"
+      DestinationFolder="G:\Games\AICOMI1\BepInEx\plugins"
+      OverwriteReadOnlyFiles="true"
+    />
     <Message
       Importance="high"
       Text="$(AssemblyName).dll deployed to $(MSBuildThisFileDirectory)..\BepInEx\plugins\"

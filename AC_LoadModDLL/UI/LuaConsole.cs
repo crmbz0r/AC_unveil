@@ -9,7 +9,7 @@ namespace AiComi_LuaMod;
 // ─────────────────────────────────────────────────────────────
 //  In-Game Lua Console + Cheat Panel  (F9)
 // ─────────────────────────────────────────────────────────────
-public class LuaConsole : MonoBehaviour
+public partial class LuaConsole : MonoBehaviour
 {
     public static void Initialize(LuaEnv env)
     {
@@ -35,24 +35,32 @@ public class LuaConsole : MonoBehaviour
     // Console
     private string _input = "";
     private string _output = "";
+    private string _searchTerm = "";
+    private int _searchMatchCount = 0;
     private Vector2 _outputScroll = Vector2.zero;
+    private Vector2 _inputScroll = Vector2.zero;
     private Rect _consoleRect = new Rect(60, 40, 750, 560);
     private readonly List<string> _history = new();
     private int _historyIdx = -1;
 
-    // Cheat panel
-    private Rect _cheatRect = new Rect(810, 80, 280, 420);
+    private const float RESIZE_GRIP_SIZE = 14f;
+    private const float MIN_CONSOLE_WIDTH = 600f;
+    private const float MIN_CONSOLE_HEIGHT = 420f;
+    private const float MIN_CHEAT_WIDTH = 300f;
+    private const float MIN_CHEAT_HEIGHT = 330f;
 
-    // Styles – jeden Frame neu zuweisen (billig); Texturen permanent cachen (teuer)
-    private GUIStyle? _styleOutput,
-        _styleInput,
-        _styleBtn,
-        _styleBtnActive,
-        _styleWindow,
-        _styleToggle;
+    private bool _consoleResizing = false;
+    private bool _cheatResizing = false;
 
-    // Texturen permanent cachen – überleben GC und Skin-Reset
-    private readonly Dictionary<int, Texture2D> _texCache = new();
+    // Anchor values recorded at drag-start; resize is applied as a delta so the
+    // window size never jumps when the user first clicks the grip.
+    private Vector2 _consoleResizeAnchorMouse;
+    private Vector2 _consoleResizeAnchorSize;
+    private Vector2 _cheatResizeAnchorMouse;
+    private Vector2 _cheatResizeAnchorSize;
+    private bool _hasStoredCursorState = false;
+    private CursorLockMode _storedCursorLockMode = CursorLockMode.None;
+    private bool _storedCursorVisible = true;
 
     public LuaConsole(IntPtr ptr)
         : base(ptr) { }
@@ -70,20 +78,44 @@ public class LuaConsole : MonoBehaviour
         {
             _consoleVisible = !_consoleVisible;
             if (!_consoleVisible)
+            {
                 _cheatVisible = false;
+                _settingsVisible = false;
+            }
         }
+
+        if (_consoleVisible || _cheatVisible || _settingsVisible)
+            EnsureCursorUnlocked();
+        else
+            RestoreCursorState();
+    }
+
+    void OnDestroy()
+    {
+        RestoreCursorState();
     }
 
     void OnGUI()
     {
-        if (!_consoleVisible && !_cheatVisible)
+        if (!_consoleVisible && !_cheatVisible && !_settingsVisible)
             return;
         InitStyles();
 
-        var bgTex = Tex(new Color(0.13f, 0.13f, 0.14f, 0.97f));
+        float bgAlpha = ConsoleConfig.Initialized ? ConsoleConfig.BackgroundOpacity.Value : 0.97f;
+        var bgTex = Tex(new Color(0.13f, 0.13f, 0.14f, bgAlpha));
 
         if (_consoleVisible)
         {
+            // Process resize BEFORE GUI.Window so Event.current is not yet consumed by the window.
+            HandleResizeGripEvents(
+                ref _consoleRect,
+                ref _consoleResizing,
+                ref _consoleResizeAnchorMouse,
+                ref _consoleResizeAnchorSize,
+                MIN_CONSOLE_WIDTH,
+                MIN_CONSOLE_HEIGHT,
+                autoHeight: false
+            );
             GUI.DrawTexture(_consoleRect, bgTex);
             _consoleRect = GUI.Window(
                 42424,
@@ -96,11 +128,23 @@ public class LuaConsole : MonoBehaviour
 
         if (_cheatVisible)
         {
+            // Auto-fit height to content; preserve width across position recalculation.
+            float cheatHeight = _cheatContentHeight > 0f ? _cheatContentHeight : _cheatRect.height;
             _cheatRect = new Rect(
                 _consoleRect.x + _consoleRect.width + 6f,
                 _consoleRect.y,
                 _cheatRect.width,
-                _cheatRect.height
+                cheatHeight
+            );
+            // Process resize BEFORE GUI.Window while Event.current is still unmodified.
+            HandleResizeGripEvents(
+                ref _cheatRect,
+                ref _cheatResizing,
+                ref _cheatResizeAnchorMouse,
+                ref _cheatResizeAnchorSize,
+                MIN_CHEAT_WIDTH,
+                MIN_CHEAT_HEIGHT,
+                autoHeight: true
             );
             GUI.DrawTexture(_cheatRect, bgTex);
             _cheatRect = GUI.Window(
@@ -111,6 +155,29 @@ public class LuaConsole : MonoBehaviour
                 _styleWindow!
             );
         }
+
+        if (_settingsVisible)
+        {
+            HandleResizeGripEvents(
+                ref _settingsRect,
+                ref _settingsResizing,
+                ref _settingsResizeAnchorMouse,
+                ref _settingsResizeAnchorSize,
+                MIN_SETTINGS_WIDTH,
+                MIN_SETTINGS_HEIGHT,
+                autoHeight: false
+            );
+            GUI.DrawTexture(_settingsRect, bgTex);
+            _settingsRect = GUI.Window(
+                42426,
+                _settingsRect,
+                (GUI.WindowFunction)DrawSettingsPanel,
+                "  Settings",
+                _styleWindow!
+            );
+        }
+
+        ConsumeGameMouseInput();
     }
 
     // ── Console Window ────────────────────────────────────────
@@ -146,213 +213,63 @@ public class LuaConsole : MonoBehaviour
         if (GUILayout.Button("↓", _styleBtn!, GUILayout.Width(30)))
             HistoryDown();
         GUILayout.FlexibleSpace();
-        var cheatLabel = _cheatVisible ? "⚡ Cheats  ✓" : "⚡ Cheats";
+        var settingsStyle = _settingsVisible ? _styleBtnActive! : _styleBtn!;
+        if (GUILayout.Button("cfg", settingsStyle, GUILayout.Width(38)))
+            _settingsVisible = !_settingsVisible;
+        var cheatLabel = _cheatVisible ? "▨ Cheats ▶" : "▨ Cheats ▧";
         var cheatStyle = _cheatVisible ? _styleBtnActive! : _styleBtn!;
         if (GUILayout.Button(cheatLabel, cheatStyle, GUILayout.Width(100)))
             _cheatVisible = !_cheatVisible;
         GUILayout.EndHorizontal();
 
-        GUILayout.Label("Output:", GUILayout.Height(LABEL_H));
+        GUILayout.BeginHorizontal(GUILayout.Height(LABEL_H));
+        GUILayout.Label("Output:", GUILayout.Width(55));
+        GUILayout.Label("Find:", GUILayout.Width(33));
+        _searchTerm = GUILayout.TextField(
+            _searchTerm,
+            GUILayout.Width(140),
+            GUILayout.Height(LABEL_H)
+        );
+        if (_searchMatchCount > 0)
+            GUILayout.Label($"{_searchMatchCount} found", GUILayout.Width(65));
+        else if (!string.IsNullOrEmpty(_searchTerm))
+            GUILayout.Label("0 found", GUILayout.Width(65));
+        if (GUILayout.Button("Copy", _styleBtn!, GUILayout.Width(50), GUILayout.Height(LABEL_H)))
+            GUIUtility.systemCopyBuffer = _output;
+        GUILayout.EndHorizontal();
+
+        bool searching = !string.IsNullOrEmpty(_searchTerm);
+        string displayOutput = searching ? HighlightSearch(_output, _searchTerm) : _output;
+        _styleOutput!.richText = searching;
+
         _outputScroll = GUILayout.BeginScrollView(_outputScroll, GUILayout.Height(outputH));
-        GUILayout.TextArea(_output, _styleOutput!, GUILayout.ExpandHeight(true));
+        GUILayout.TextArea(displayOutput, _styleOutput, GUILayout.ExpandHeight(true));
         GUILayout.EndScrollView();
 
         GUILayout.Label("Lua:  (Ctrl+Enter = Run)", GUILayout.Height(LABEL_H));
         GUI.SetNextControlName("LuaInput");
-        _input = GUILayout.TextArea(_input, _styleInput!, GUILayout.Height(INPUT_H));
 
-        // Fix: Handle Ctrl+Enter regardless of input field focus
-        if (Input.GetKeyDown(KeyCode.Return) && (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)))
-        {
-            // Only execute if the input field is focused or no other UI element has focus
-            if (GUI.GetNameOfFocusedControl() == "LuaInput" || GUI.GetNameOfFocusedControl() == "")
-            {
-                Execute();
-            }
-        }
+        // Intercept Ctrl+Enter BEFORE the TextArea processes Event.current.
+        // Consuming the event here prevents the TextArea from inserting a newline
+        // while still allowing Execute() to run with the current _input value.
+        var kev = Event.current;
+        bool ctrlEnterPressed =
+            kev.type == EventType.KeyDown
+            && (kev.keyCode == KeyCode.Return || kev.keyCode == KeyCode.KeypadEnter)
+            && kev.control;
+        if (ctrlEnterPressed)
+            kev.Use();
+
+        _inputScroll = GUILayout.BeginScrollView(_inputScroll, GUILayout.Height(INPUT_H));
+        _input = GUILayout.TextArea(_input, _styleInput!, GUILayout.ExpandHeight(true));
+        GUILayout.EndScrollView();
+
+        if (ctrlEnterPressed)
+            Execute();
+
+        DrawResizeGripHandle(_consoleRect);
 
         GUI.DragWindow(new Rect(0, 0, _consoleRect.width, 20));
-    }
-
-    // ── Cheat Panel ───────────────────────────────────────────
-    private GUIStyle? _styleToggleOn,
-        _styleToggleOff;
-
-    private bool DrawToggle(bool value, string label)
-    {
-        if (_styleToggleOn == null)
-        {
-            _styleToggleOn = new GUIStyle(_styleBtn!)
-            {
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleLeft,
-            };
-            _styleToggleOn.normal.background = Tex(new Color(0.10f, 0.28f, 0.10f, 1f));
-            _styleToggleOn.hover.background = Tex(new Color(0.13f, 0.35f, 0.13f, 1f));
-            _styleToggleOn.normal.textColor = new Color(0.4f, 1f, 0.4f);
-            _styleToggleOn.hover.textColor = new Color(0.5f, 1f, 0.5f);
-
-            _styleToggleOff = new GUIStyle(_styleBtn!)
-            {
-                fontStyle = FontStyle.Normal,
-                alignment = TextAnchor.MiddleLeft,
-            };
-            _styleToggleOff.normal.textColor = new Color(0.6f, 0.6f, 0.6f);
-            _styleToggleOff.hover.textColor = new Color(0.85f, 0.85f, 0.85f);
-        }
-
-        var style = value ? _styleToggleOn! : _styleToggleOff!;
-        var symbol = value ? "<ON> " : "[OFF]";
-        if (GUILayout.Button($"{symbol}  {label}", style))
-            return !value;
-        return value;
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "CodeQuality",
-        "IDE0060:Remove unused parameter",
-        Justification = "Required by GUI.Window callback signature"
-    )]
-    private void DrawCheatPanel(int id)
-    {
-        GUILayout.Space(4);
-
-        // ── Dialog & Reactions ──
-        GUILayout.BeginVertical(GUI.skin.box);
-        GUILayout.Label("~ Dialog / Conversation", GUI.skin.label);
-        DialogSceneHooks.NoFavorLoss = DrawToggle(DialogSceneHooks.NoFavorLoss, "No Favor Loss");
-        DialogSceneHooks.NoMoodLoss = DrawToggle(DialogSceneHooks.NoMoodLoss, "No Mood Loss");
-        DialogSceneHooks.ForcePositiveChoice = DrawToggle(
-            DialogSceneHooks.ForcePositiveChoice,
-            "Force Positive Choice"
-        );
-        GUILayout.EndVertical();
-
-        GUILayout.Space(5);
-
-        // ── Touch Scene ──
-        GUILayout.BeginVertical(GUI.skin.box);
-        GUILayout.Label("~ Touch (Massage) Scene", GUI.skin.label);
-
-        // Unlock all Touch Items (cursors)
-        TouchSceneHooks.UnlockItems = DrawToggle(
-            TouchSceneHooks.UnlockItems,
-            "Unlock all massage items"
-        );
-
-        // No Dislike: beim Aktivieren Lua-Code ausführen
-        var prevNoDislike = TouchSceneHooks.NoDislike;
-        TouchSceneHooks.NoDislike = DrawToggle(TouchSceneHooks.NoDislike, "No Dislike React");
-        if (TouchSceneHooks.NoDislike && !prevNoDislike)
-        {
-            RunLua(TouchSceneHooks.LuaNoDislike);
-        }
-
-        var prevShowNextH = TouchSceneHooks.ShowNextH;
-        TouchSceneHooks.ShowNextH = DrawToggle(TouchSceneHooks.ShowNextH, "Show Next H Button");
-        if (TouchSceneHooks.ShowNextH && !prevShowNextH)
-        {
-            TouchSceneHooks.ApplyShowNextH();
-        }
-
-        GUILayout.EndVertical();
-
-        GUILayout.Space(5);
-
-        // ── Quick Actions ──
-        GUILayout.BeginVertical(GUI.skin.box);
-        GUILayout.Label("~ Quick Actions", GUI.skin.label);
-
-        if (_eventSnapshot != null)
-            GUILayout.Label($"  [*] Snapshot: {_eventSnapshot.Count} events saved", GUI.skin.label);
-        else
-            GUILayout.Label("  [ ] No snapshot", GUI.skin.label);
-
-        if (GUILayout.Button("  [+] Unlock All Events (w/ backup)", _styleBtn!))
-        {
-            TakeEventSnapshot();
-            RunLua(
-                @"
-                local em = CS.AC.Lua.EventTable.EventMemory
-                for i=0,6 do em:Add(i) end
-                em:Add(300)
-                for i=30,69 do em:Add(i) end
-                for i=100,110 do em:Add(i) end
-                for i=200,206 do em:Add(i) end
-                for i=208,218 do em:Add(i) end
-                for i=221,223 do em:Add(i) end
-                em:Add(230) em:Add(231) em:Add(232) em:Add(240)
-                print('All events unlocked! Count: ' .. em.Count)
-            "
-            );
-        }
-
-        GUI.enabled = _eventSnapshot != null;
-        if (GUILayout.Button("  [-] Restore Snapshot", _styleBtn!))
-            RestoreEventSnapshot();
-        GUI.enabled = true;
-
-        if (GUILayout.Button("  [?] Dump EventMemory", _styleBtn!))
-            RunLua(
-                @"
-                local em = CS.AC.Lua.EventTable.EventMemory
-                print('EventMemory (' .. em.Count .. '):')
-                local e = em:GetEnumerator()
-                while e:MoveNext() do print('  ID: ' .. tostring(e.Current)) end
-            "
-            );
-
-        GUILayout.EndVertical();
-
-        GUI.DragWindow(new Rect(0, 0, _cheatRect.width, 20));
-    }
-
-    // ── Event Snapshot ────────────────────────────────────────
-    private HashSet<int>? _eventSnapshot;
-
-    private void TakeEventSnapshot()
-    {
-        if (_luaEnv is null)
-            return;
-        _eventSnapshot = new HashSet<int>();
-        var results = _luaEnv.DoString(
-            @"
-            local snap = {}
-            local em = CS.AC.Lua.EventTable.EventMemory
-            local e = em:GetEnumerator()
-            while e:MoveNext() do
-                snap[#snap+1] = e.Current
-            end
-            return table.unpack(snap)
-        ",
-            "snapshot"
-        );
-        if (results != null)
-            foreach (var r in results)
-                if (r != null)
-                    try
-                    {
-                        _eventSnapshot.Add(Convert.ToInt32(r));
-                    }
-                    catch { }
-        AppendOutput($"[Snapshot] {_eventSnapshot.Count} events saved\n");
-    }
-
-    private void RestoreEventSnapshot()
-    {
-        if (_luaEnv is null || _eventSnapshot == null)
-            return;
-        var ids = string.Join(",", _eventSnapshot);
-        RunLua(
-            $@"
-            local em = CS.AC.Lua.EventTable.EventMemory
-            em:Clear()
-            for _, id in ipairs({{{ids}}}) do
-                em:Add(id)
-            end
-            print('Events wiederhergestellt: ' .. em.Count)
-        "
-        );
     }
 
     // ── Execute ───────────────────────────────────────────────
@@ -448,7 +365,9 @@ public class LuaConsole : MonoBehaviour
 
         if (sb.Length > 0)
             AppendOutput(sb.ToString());
-        _outputScroll = new Vector2(0, float.MaxValue);
+        bool autoScroll = !ConsoleConfig.Initialized || ConsoleConfig.AutoScrollOutput.Value;
+        if (autoScroll)
+            _outputScroll = new Vector2(0, float.MaxValue);
     }
 
     // ── History ───────────────────────────────────────────────
@@ -474,135 +393,177 @@ public class LuaConsole : MonoBehaviour
             _input = _history[_historyIdx];
     }
 
-    // ── Marquee / LED Laufschrift ─────────────────────────────
-    private GUIStyle? _styleRainbow;
-    private float _marqueeOffset = 0f;
-    private const float MARQUEE_SPEED = 55f;
-
-    private void DrawRainbowTitle(Rect area, string text)
+    // ── Helpers ───────────────────────────────────────────────
+    private string HighlightSearch(string text, string term)
     {
-        if (_styleRainbow == null)
+        if (string.IsNullOrEmpty(term) || string.IsNullOrEmpty(text))
         {
-            _styleRainbow = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 13,
-                fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleLeft,
-            };
+            _searchMatchCount = 0;
+            return text;
         }
 
-        float charW = _styleRainbow.CalcSize(new GUIContent("W")).x;
-        float totalW = charW * text.Length;
+        var accentHex = ConsoleConfig.Initialized
+            ? ConsoleConfig.AccentColor.Value.TrimStart('#')
+            : "66FF66";
+        string tagOpen = $"<color=#{accentHex}><b>";
+        string tagClose = "</b></color>";
 
-        _marqueeOffset += MARQUEE_SPEED * Time.deltaTime;
-        if (_marqueeOffset > totalW)
-            _marqueeOffset = 0f;
+        var sb = new StringBuilder(text.Length + term.Length * 40);
+        int idx = 0;
+        int count = 0;
 
-        float speed = 0.4f;
-        float wave = 0.03f;
-        float startX = area.width - _marqueeOffset;
-
-        GUI.BeginGroup(new Rect(area.x, area.y, area.width, area.height));
-        
-        // Draw text twice for seamless scrolling: once at current position, once offset by total width
-        for (int pass = 0; pass < 2; pass++)
+        while (idx < text.Length)
         {
-            float offsetX = pass == 0 ? 0f : -totalW;
-            
-            for (int i = 0; i < text.Length; i++)
+            int found = text.IndexOf(term, idx, StringComparison.OrdinalIgnoreCase);
+            if (found < 0)
             {
-                float xPos = startX + i * charW + offsetX;
-                if (xPos > -charW && xPos < area.width)
-                {
-                    float hue = ((i * wave - Time.realtimeSinceStartup * speed) % 1f);
-                    if (hue < 0)
-                        hue += 1f;
-                    _styleRainbow.normal.textColor = Color.HSVToRGB(hue, 1f, 1f);
-                    GUI.Label(
-                        new Rect(xPos, 2f, charW + 2f, area.height - 2f),
-                        text[i].ToString(),
-                        _styleRainbow
-                    );
-                }
+                sb.Append(text, idx, text.Length - idx);
+                break;
             }
+            sb.Append(text, idx, found - idx);
+            sb.Append(tagOpen);
+            sb.Append(text, found, term.Length);
+            sb.Append(tagClose);
+            count++;
+            idx = found + term.Length;
         }
-        GUI.EndGroup();
-        _styleRainbow.normal.textColor = Color.white;
+
+        _searchMatchCount = count;
+        return sb.ToString();
     }
 
-    // ── Helpers ───────────────────────────────────────────────
     private void AppendOutput(string text)
     {
         _output += text;
-        if (_output.Length > 32000)
-            _output = _output[(_output.Length - 32000)..];
+        int maxLen = ConsoleConfig.Initialized ? ConsoleConfig.OutputBufferSize.Value : 32000;
+        if (_output.Length > maxLen)
+            _output = _output[(_output.Length - maxLen)..];
     }
 
-    private Texture2D Tex(Color col)
+    private void EnsureCursorUnlocked()
     {
-        int key = col.GetHashCode();
-        if (_texCache.TryGetValue(key, out var existing) && existing != null)
-            return existing;
-        var t = new Texture2D(1, 1);
-        t.SetPixel(0, 0, col);
-        t.Apply();
-        t.hideFlags = HideFlags.HideAndDontSave;
-        UnityEngine.Object.DontDestroyOnLoad(t);
-        _texCache[key] = t;
-        return t;
+        if (!_hasStoredCursorState)
+        {
+            _storedCursorLockMode = Cursor.lockState;
+            _storedCursorVisible = Cursor.visible;
+            _hasStoredCursorState = true;
+        }
+
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
     }
 
-    private void InitStyles()
+    private void RestoreCursorState()
     {
-        var bg = new Color(0.13f, 0.13f, 0.14f, 0.97f);
-        var bgInput = new Color(0.10f, 0.10f, 0.11f, 1f);
-        var bgBtn = new Color(0.22f, 0.22f, 0.25f, 1f);
-        var bgBtnHov = new Color(0.30f, 0.30f, 0.35f, 1f);
-        var textMain = new Color(0.92f, 0.92f, 0.92f);
-        var textGreen = new Color(0.4f, 1f, 0.4f);
-        var accent = new Color(0.25f, 0.25f, 0.30f, 1f);
+        if (!_hasStoredCursorState)
+            return;
 
-        _styleWindow = new GUIStyle(GUI.skin.window) { fontSize = 17, fontStyle = FontStyle.Bold };
-        _styleWindow.normal.background = null;
-        _styleWindow.onNormal.background = null;
-        _styleWindow.normal.textColor = new Color(0, 0, 0, 0);
+        Cursor.lockState = _storedCursorLockMode;
+        Cursor.visible = _storedCursorVisible;
+        _hasStoredCursorState = false;
+        _consoleResizing = false;
+        _cheatResizing = false;
+        _settingsResizing = false;
+    }
 
-        _styleOutput = new GUIStyle(GUI.skin.textArea)
+    private void ConsumeGameMouseInput()
+    {
+        var mousePos = Input.mousePosition;
+        mousePos.y = Screen.height - mousePos.y;
+
+        bool mouseOverConsole = _consoleVisible && _consoleRect.Contains(mousePos);
+        bool mouseOverCheat = _cheatVisible && _cheatRect.Contains(mousePos);
+        bool mouseOverSettings = _settingsVisible && _settingsRect.Contains(mousePos);
+        bool interactingWithGui =
+            mouseOverConsole
+            || mouseOverCheat
+            || mouseOverSettings
+            || _consoleResizing
+            || _cheatResizing
+            || _settingsResizing;
+
+        if (interactingWithGui)
+            Input.ResetInputAxes();
+    }
+
+    // Draws the resize grip texture in window-local coordinates.
+    // Must be called inside a GUI.Window callback.
+    private void DrawResizeGripHandle(Rect windowRect)
+    {
+        var gripRect = new Rect(
+            windowRect.width - RESIZE_GRIP_SIZE - 2f,
+            windowRect.height - RESIZE_GRIP_SIZE - 2f,
+            RESIZE_GRIP_SIZE,
+            RESIZE_GRIP_SIZE
+        );
+        GUI.DrawTexture(gripRect, Tex(new Color(0.35f, 0.35f, 0.35f, 0.95f)));
+    }
+
+    // Handles resize grip events using Event.current and an anchor-offset approach.
+    // Must be called BEFORE the corresponding GUI.Window call in OnGUI() so that
+    // Event.current is not yet consumed or modified by the window.
+    //
+    // Anchor approach: on drag-start the initial mouse position and window size are
+    // recorded.  Every subsequent frame the resize is applied as a delta so:
+    //   - clicking the grip causes zero size change (delta = 0)
+    //   - dragging gives a smooth, correctly-directional resize
+    //
+    // Event.current is used for start/stop detection instead of Input.GetMouseButton
+    // because ConsumeGameMouseInput() calls Input.ResetInputAxes() which zeros out
+    // Input.GetMouseButton mid-frame, causing the resize state to be lost.
+    private void HandleResizeGripEvents(
+        ref Rect windowRect,
+        ref bool isResizing,
+        ref Vector2 anchorMouse,
+        ref Vector2 anchorSize,
+        float minWidth,
+        float minHeight,
+        bool autoHeight
+    )
+    {
+        // Input.mousePosition: bottom-left origin → convert to GUI top-left origin.
+        // Input.mousePosition is NOT zeroed by Input.ResetInputAxes(), making it
+        // reliable even after ConsumeGameMouseInput() runs.
+        var mouseGui = new Vector2(Input.mousePosition.x, Screen.height - Input.mousePosition.y);
+
+        var evt = Event.current;
+
+        // Grip hit-area in screen space.
+        var gripScreen = new Rect(
+            windowRect.x + windowRect.width - RESIZE_GRIP_SIZE - 2f,
+            windowRect.y + windowRect.height - RESIZE_GRIP_SIZE - 2f,
+            RESIZE_GRIP_SIZE,
+            RESIZE_GRIP_SIZE
+        );
+
+        // Start: record anchor on the MouseDown event so we can compute a delta later.
+        if (evt.type == EventType.MouseDown && evt.button == 0 && gripScreen.Contains(mouseGui))
         {
-            fontSize = 16,
-            wordWrap = true,
-            richText = false,
-        };
-        _styleOutput.normal.background = Tex(bgInput);
-        _styleOutput.focused.background = Tex(bgInput);
-        _styleOutput.normal.textColor = textMain;
-        _styleOutput.focused.textColor = textMain;
+            isResizing = true;
+            anchorMouse = mouseGui;
+            anchorSize = new Vector2(windowRect.width, windowRect.height);
+        }
 
-        _styleInput = new GUIStyle(GUI.skin.textArea) { fontSize = 17, wordWrap = true };
-        _styleInput.normal.background = Tex(bgInput);
-        _styleInput.focused.background = Tex(new Color(0.12f, 0.12f, 0.16f, 1f));
-        _styleInput.normal.textColor = Color.white;
-        _styleInput.focused.textColor = Color.white;
-
-        _styleBtn = new GUIStyle(GUI.skin.button)
+        // Stop: rawType catches MouseUp even if a GUI.Window already Used the event.
+        if (evt.rawType == EventType.MouseUp)
         {
-            fontSize = 16,
-            alignment = TextAnchor.MiddleCenter,
-        };
-        _styleBtn.normal.background = Tex(bgBtn);
-        _styleBtn.hover.background = Tex(bgBtnHov);
-        _styleBtn.active.background = Tex(accent);
-        _styleBtn.normal.textColor = textMain;
-        _styleBtn.hover.textColor = Color.white;
+            isResizing = false;
+            return;
+        }
 
-        _styleBtnActive = new GUIStyle(_styleBtn) { fontStyle = FontStyle.Bold };
-        _styleBtnActive.normal.background = Tex(new Color(0.15f, 0.35f, 0.15f, 1f));
-        _styleBtnActive.hover.background = Tex(new Color(0.18f, 0.42f, 0.18f, 1f));
-        _styleBtnActive.normal.textColor = textGreen;
-        _styleBtnActive.hover.textColor = textGreen;
+        if (!isResizing)
+            return;
 
-        _styleToggle = new GUIStyle(GUI.skin.toggle) { fontSize = 16 };
-        _styleToggle.normal.textColor = textMain;
-        _styleToggle.hover.textColor = Color.white;
+        // New size = size at drag-start + how far the mouse has moved since then.
+        Vector2 delta = mouseGui - anchorMouse;
+
+        float maxWidth = Mathf.Max(minWidth, Screen.width - windowRect.x - 8f);
+        windowRect.width = Mathf.Clamp(anchorSize.x + delta.x, minWidth, maxWidth);
+
+        if (!autoHeight)
+        {
+            float maxHeight = Mathf.Max(minHeight, Screen.height - windowRect.y - 8f);
+            windowRect.height = Mathf.Clamp(anchorSize.y + delta.y, minHeight, maxHeight);
+        }
     }
 }

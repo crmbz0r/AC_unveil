@@ -17,6 +17,10 @@ public class Plugin : BasePlugin
         Harmony.CreateAndPatchAll(typeof(TouchSceneHooks));
         Harmony.CreateAndPatchAll(typeof(DialogSceneHooks));
         Harmony.CreateAndPatchAll(typeof(TouchMonitorHooks));
+        Harmony.CreateAndPatchAll(typeof(ExplorationSceneHooks));
+        AddComponent<NoclipBehaviour>();
+        LuaConsole.InitConfig(Config);
+        LuaConsole.ApplySavedCheatStates();
         Log.LogWarning("AiComi LuaMod loaded -- waiting for BuildConditionsFromLua...");
     }
 }
