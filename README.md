@@ -1,6 +1,10 @@
 # AiComi Lua Mod
 
 A BepInEx plugin for AiComi that enables Lua scripting support and provides various quality-of-life features.
+>[!CAUTION]
+> THIS PROJECT IS - ***WORK IN PROGRESS*** -  
+> There will be lots of changes here and there  
+> until I will call this plugin to be in an  acceptable state to release it!  
 
 ## Features
 
